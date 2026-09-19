@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Asistencia Escolar</title>
+    
+    <!-- Manifest embebido para convertir la PWA en instalable -->
+    <link rel="manifest" href='data:application/manifest+json,{
+        "name": "Asistencia Escolar",
+        "short_name": "Asistencia",
+        "start_url": "./index.html",
+        "display": "standalone",
+        "background_color": "#f8fafc",
+        "theme_color": "#2563eb",
+        "icons": [{
+            "src": "https://img.icons8.com/color/192/qr-code.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        }]
+    }'>
+
+    <!-- Tailwind CSS para diseño moderno -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Librería para escanear QR -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <!-- Librería para generar códigos QR -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Librería para recorte de imágenes (Cropper.js) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+    <!-- Librería html2canvas para exportar credenciales como imagen PNG -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+        @media print {
+            body * { visibility: hidden; }
+            #printable-area, #printable-area * { visibility: visible; }
+            #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
+            .no-print { display: none !important; }
+            .print-card { break-inside: avoid; page-break-inside: avoid; margin-bottom: 20px; }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-900 pb-28 text-base">
+
+    <!-- Notificaciones Flotantes (Toast) -->
+    <div id="toastContainer" class="fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] space-y-2 w-11/12 max-w-sm pointer-events-none"></div>
+
+    <!-- Header Principal -->
+    <header class="bg-blue-600 text-white p-4.5 shadow-md sticky top-0 z-50 flex justify-between items-center">
+        <div>
+            <h1 class="font-bold text-lg">Control de Asistencia</h1>
+            <p id="lblContexto" class="text-xs text-blue-100 font-semibold">Selecciona Escuela y Grupo</p>
+        </div>
+        <button onclick="abrirModalConfig()" class="bg-blue-700 hover:bg-blue-800 text-xs px-3.5 py-2.5 rounded-xl border border-blue-400 font-bold transition shadow-sm">
+            ⚙️ Configurar
+        </button>
+    </header>
+
+    <!-- Barra de Selección Rápida (Escuela / Grupo Activo) -->
+    <section class="bg-white border-b border-slate-200 p-4 shadow-sm sticky top-[68px] z-40">
+        <div class="max-w-md mx-auto grid grid-cols-2 gap-3">
+            <div>
+                <label class="block text-xs uppercase font-extrabold text-slate-500 mb-1">Escuela Activa</label>
+                <select id="selEscuelaActiva" onchange="cambiarEscuelaActiva()" class="w-full text-sm bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                    <option value="">-- Sin Escuelas --</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs uppercase font-extrabold text-slate-500 mb-1">Grupo Activo</label>
+                <select id="selGrupoActivo" onchange="cambiarGrupoActivo()" class="w-full text-sm bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                    <option value="">-- Sin Grupos --</option>
+                </select>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contenedor de Vistas -->
+    <main class="max-w-md mx-auto p-4 space-y-4">
+
+        <!-- VISTA 1: ESCANEAR ASISTENCIA -->
+        <div id="vistaEscaner" class="space-y-4">
+            <div class="bg-white p-4.5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <h2 class="text-sm font-bold text-slate-700 mb-3">Escáner de Credenciales</h2>
+                <div id="reader" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-900 min-h-[300px]"></div>
+                <div id="feedbackScan" class="mt-3 p-3.5 rounded-xl hidden text-sm font-semibold"></div>
+            </div>
+
+            <div class="bg-white p-4.5 rounded-2xl shadow-sm border border-slate-200">
+                <h3 class="text-xs font-bold text-slate-500 uppercase mb-3">Asistencias de Hoy (<span id="txtFechaHoy"></span>)</h3>
+                <div id="listaAsistidosHoy" class="space-y-2.5 max-h-56 overflow-y-auto text-sm">
+                    <p class="text-slate-400 italic text-center py-3">Ningún registro hoy todavía.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- VISTA 2: GESTIÓN DE ALUMNOS Y QR -->
+        <div id="vistaAlumnos" class="space-y-4 hidden">
+            <div class="bg-white p-4.5 rounded-2xl shadow-sm border border-slate-200">
+                <h2 id="tituloFormAlumno" class="text-sm font-bold text-slate-700 mb-3">Registrar Nuevo Alumno</h2>
+                <form id="formAlumno" onsubmit="prepararImagenAlumno(event)" class="space-y-3.5">
+                    <input type="hidden" id="editandoIdOriginal" value="">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 mb-1">Matrícula o ID único</label>
+                        <input type="text" id="txtIdAlumno" required placeholder="Ej. ALU-2026-001" class="w-full text-sm border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 mb-1">Nombre Completo del Alumno</label>
+                        <input type="text" id="txtNombreAlumno" required placeholder="Ej. Juan Pérez Gómez" class="w-full text-sm border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 mb-1">Fotografía del Alumno (Opcional)</label>
+                        <input type="file" id="fileFotoAlumno" accept="image/*" onchange="cargarImagenParaRecortar(event)" class="w-full text-xs border border-slate-300 rounded-xl p-2.5 bg-slate-50 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 cursor-pointer">
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" id="btnGuardarAlumno" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3.5 rounded-xl transition shadow-sm">
+                            Guardar Alumno y Generar QR
+                        </button>
+                        <button type="button" id="btnCancelarEdicion" onclick="cancelarEdicionAlumno()" class="hidden bg-slate-300 hover:bg-slate-400 text-slate-800 text-sm font-bold px-4 py-3.5 rounded-xl transition">
+                            Cancelar
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white p-4.5 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-bold text-slate-500 uppercase">Lista de Alumnos (<span id="contadorAlumnos">0</span>)</h3>
+                    <button onclick="abrirModalTarjetas()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl transition shadow-sm">
+                        🖨️ Ver y Exportar Credenciales
+                    </button>
+                </div>
+                <div id="tablaAlumnos" class="space-y-2.5 max-h-64 overflow-y-auto text-sm">
+                    <p class="text-slate-400 italic text-center py-3">No hay alumnos en este grupo.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- VISTA 3: REPORTES Y FALTAS -->
+        <div id="vistaReportes" class="space-y-4 hidden">
+            <div class="bg-white p-4.5 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-700 mb-2">Resumen de Asistencias y Faltas</h2>
+                <p class="text-xs text-slate-500 mb-4 font-medium">Total de clases impartidas: <span id="lblTotalClases" class="font-bold text-blue-600">0</span></p>
+                
+                <div class="flex gap-2 mb-4">
+                    <button onclick="window.print()" class="flex-1 bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold py-3.5 rounded-xl transition shadow-sm">
+                        📄 Imprimir o Guardar Reporte PDF
+                    </button>
+                </div>
+
+                <div id="printable-area" class="bg-white p-2">
+                    <div class="hidden print:block mb-4 text-center">
+                        <h2 class="text-lg font-bold" id="printTituloEscuela">Reporte Escolar</h2>
+                        <p class="text-xs text-slate-600 font-semibold" id="printSubtituloGrupo">Grupo</p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm border-collapse">
+                            <thead>
+                                <tr class="bg-slate-100 border-b border-slate-300 text-slate-700">
+                                    <th class="p-3 font-bold">Alumno</th>
+                                    <th class="p-3 text-center font-bold">Asist.</th>
+                                    <th class="p-3 text-center font-bold">Faltas</th>
+                                    <th class="p-3 text-center font-bold">%</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cuerpoTablaReporte">
+                                <tr><td colspan="4" class="p-4 text-center text-slate-400 italic">Selecciona un grupo para ver estadísticas.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Menú de Navegación Inferior Estilo App Nativa -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-xl max-w-md mx-auto flex justify-around p-2.5 z-50">
+        <button onclick="cambiarVista('escaner')" id="btnTabEscaner" class="flex flex-col items-center text-blue-600 text-xs font-bold py-1.5 px-4">
+            <span class="text-2xl mb-0.5">📷</span>
+            Escanear
+        </button>
+        <button onclick="cambiarVista('alumnos')" id="btnTabAlumnos" class="flex flex-col items-center text-slate-400 text-xs font-bold py-1.5 px-4">
+            <span class="text-2xl mb-0.5">👥</span>
+            Alumnos & QR
+        </button>
+        <button onclick="cambiarVista('reportes')" id="btnTabReportes" class="flex flex-col items-center text-slate-400 text-xs font-bold py-1.5 px-4">
+            <span class="text-2xl mb-0.5">📊</span>
+            Reportes
+        </button>
+    </nav>
+
+    <!-- MODAL DE RECORTE DE FOTO -->
+    <div id="modalRecorte" class="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-[70] hidden flex flex-col items-center justify-center p-4">
+        <div class="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl space-y-4 flex flex-col max-h-[90vh]">
+            <h3 class="font-bold text-base text-slate-800 text-center">Centrar y Recortar Foto</h3>
+            <div class="relative w-full h-72 bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center">
+                <img id="imagenParaRecortar" class="max-w-full block" alt="Foto a recortar">
+            </div>
+            <div class="flex gap-2.5 pt-2">
+                <button type="button" onclick="cancelarRecorte()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-sm py-3 rounded-xl transition">Cancelar</button>
+                <button type="button" onclick="guardarRecorte()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm py-3 rounded-xl transition shadow-sm">Recortar y Usar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIGURACIÓN DE ESCUELAS Y MAESTRO -->
+    <div id="modalConfig" class="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
+            <div class="flex justify-between items-center border-b pb-3 shrink-0">
+                <h3 class="font-bold text-base text-slate-900">Configuración General</h3>
+                <button onclick="cerrarModalConfig()" class="text-slate-400 hover:text-slate-600 font-bold text-lg px-2">✕</button>
+            </div>
+
+            <div class="space-y-3.5 overflow-y-auto pr-1 flex-1">
+                <!-- Nombre del Maestro -->
+                <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2">
+                    <label class="block text-xs font-bold text-slate-700">👨‍🏫 Nombre del Maestro (para credenciales):</label>
+                    <input type="text" id="inputNombreMaestro" placeholder="Ej. Profr. Alfredo Xul" oninput="guardarDatosMaestro(this.value)" class="w-full text-sm border border-slate-300 rounded-xl p-2.5 bg-white font-semibold outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+
+                <!-- Logo de la Escuela (Opcional) -->
+                <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2">
+                    <label class="block text-xs font-bold text-slate-700">🖼️ Logo de la Escuela (Opcional):</label>
+                    <div class="flex items-center gap-3">
+                        <div id="previewLogoContainer" class="w-12 h-12 rounded-xl bg-white border flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
+                            <span class="text-xs text-slate-400">Sin logo</span>
+                        </div>
+                        <input type="file" id="fileLogoEscuela" accept="image/*" onchange="cargarLogoEscuela(event)" class="w-full text-xs border rounded-xl p-2 bg-white file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-100 file:text-blue-700 cursor-pointer">
+                    </div>
+                    <button type="button" onclick="eliminarLogoEscuela()" class="text-xs text-red-500 font-bold hover:underline pt-1 block">🗑️ Quitar logo actual</button>
+                </div>
+
+                <!-- Color Personalizado de Credenciales -->
+                <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2">
+                    <label class="block text-xs font-bold text-slate-700">🎨 Color de Fondo para Credenciales:</label>
+                    <div class="flex items-center gap-3">
+                        <input type="color" id="inputColorTarjeta" value="#e07a5f" onchange="cambiarColorTarjeta(this.value)" class="w-12 h-10 rounded-xl border cursor-pointer">
+                        <span id="txtColorHex" class="text-xs font-mono font-bold text-slate-600">#e07a5f</span>
+                    </div>
+                </div>
+
+                <div class="space-y-1.5 pt-1">
+                    <label class="block text-xs font-bold text-slate-700">Toca una escuela para administrar grupos:</label>
+                    <div id="listaEscuelasConfig" class="space-y-2 max-h-36 overflow-y-auto p-2 bg-slate-50 rounded-2xl border border-slate-200"></div>
+                    
+                    <div class="pt-2">
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Agregar nueva escuela:</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="txtNuevaEscuela" placeholder="Ej. Secundaria Técnica 49" class="w-full text-sm border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500">
+                            <button onclick="agregarEscuela()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-3 rounded-xl transition shadow-sm">Crear</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel de Grupos de la Escuela Seleccionada -->
+                <div id="panelGruposConfig" class="bg-blue-50/70 p-3.5 rounded-2xl border border-blue-200 space-y-2.5 hidden">
+                    <div class="flex justify-between items-center border-b border-blue-200 pb-1.5">
+                        <span class="text-xs font-bold text-blue-900">Grupos en: <span id="lblEscuelaAdminConfig" class="text-blue-700 font-extrabold"></span></span>
+                    </div>
+                    
+                    <div id="listaGruposAdminConfig" class="space-y-2 max-h-32 overflow-y-auto pr-1"></div>
+
+                    <div class="pt-2 border-t border-blue-200">
+                        <label class="block text-xs font-semibold text-slate-700 mb-1">Agregar grupo a esta escuela:</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="txtNuevoGrupoConfig" placeholder="Ej. 1A, 2B..." class="w-full text-sm border border-blue-200 bg-white rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500">
+                            <button onclick="agregarGrupoDesdeConfig()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-3 rounded-xl transition shadow-sm">Agregar</button>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="border-slate-100">
+
+                <!-- Respaldos -->
+                <div class="space-y-2">
+                    <label class="block text-xs font-bold text-slate-700">Copias de Seguridad (Datos Locales)</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="exportarRespaldoJSON()" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-3 px-3 rounded-xl border transition">
+                            📥 Exportar JSON
+                        </button>
+                        <label class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-3 px-3 rounded-xl border transition text-center cursor-pointer">
+                            📤 Importar JSON
+                            <input type="file" id="fileImport" accept=".json" onchange="importarRespaldoJSON(event)" class="hidden">
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="cerrarModalConfig()" class="w-full bg-slate-900 hover:bg-slate-800 text-white text-sm font-bold py-3.5 rounded-xl shrink-0 transition">
+                Cerrar Ventana
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL DE VISUALIZACIÓN Y EXPORTACIÓN DE CREDENCIALES -->
+    <div id="modalTarjetas" class="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 hidden flex flex-col p-4">
+        <div class="bg-white rounded-t-2xl p-4 flex justify-between items-center shadow-md max-w-xl mx-auto w-full">
+            <h3 class="font-bold text-base text-slate-900">Credenciales del Grupo</h3>
+            <div class="flex gap-2">
+                <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-3 py-2 rounded-xl transition">🖨️ Imprimir Todas</button>
+                <button onclick="cerrarModalTarjetas()" class="text-slate-400 hover:text-slate-600 font-bold text-lg px-2">✕</button>
+            </div>
+        </div>
+        <div class="bg-slate-200 flex-1 overflow-y-auto p-4 flex justify-center">
+            <div id="contenedorTarjetasImpresion" class="print-card-container grid grid-cols-1 md:grid-cols-2 gap-5 max-w-xl w-full"></div>
+        </div>
+    </div>
+
+    <!-- Script principal con Lógica Completa -->
+    <script>
+        let db = JSON.parse(localStorage.getItem('asistencia_db')) || { escuelas: {} };
+        let escuelaActiva = localStorage.getItem('escuela_activa') || '';
+        let grupoActivo = localStorage.getItem('grupo_activo') || '';
+        let colorTarjeta = localStorage.getItem('color_tarjeta') || '#e07a5f';
+        let nombreMaestro = localStorage.getItem('nombre_maestro') || '';
+        let logoEscuelaBase64 = localStorage.getItem('logo_escuela') || '';
+        let escuelaSeleccionadaAdmin = '';
+        let cropper = null;
+        let fotoRecortadaBase64 = null;
+        let html5QrCode = null;
+        let scannerActivo = false;
+
+        function guardarDB() {
+            localStorage.setItem('asistencia_db', JSON.stringify(db));
+            localStorage.setItem('escuela_activa', escuelaActiva);
+            localStorage.setItem('grupo_activo', grupoActivo);
+            localStorage.setItem('color_tarjeta', colorTarjeta);
+            localStorage.setItem('nombre_maestro', nombreMaestro);
+            localStorage.setItem('logo_escuela', logoEscuelaBase64);
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const hoyStr = new Date().toLocaleDateString();
+            document.getElementById('txtFechaHoy').innerText = hoyStr;
+            document.getElementById('inputColorTarjeta').value = colorTarjeta;
+            document.getElementById('txtColorHex').innerText = colorTarjeta;
+            document.getElementById('inputNombreMaestro').value = nombreMaestro;
+            actualizarPreviewLogo();
+            sincronizarSelectoresEscuelasGrupos();
+            cambiarVista('escaner');
+        });
+
+        function mostrarToast(mensaje, tipo = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            let bgColor = tipo === 'success' ? 'bg-emerald-600' : (tipo === 'warning' ? 'bg-amber-600' : 'bg-red-600');
+            toast.className = `${bgColor} text-white text-sm font-bold p-3.5 rounded-2xl shadow-xl pointer-events-auto transition transform translate-y-0 opacity-100 flex items-center justify-between`;
+            toast.innerHTML = `<span>${mensaje}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('opacity-0', '-translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function guardarDatosMaestro(val) {
+            nombreMaestro = val;
+            guardarDB();
+        }
+
+        function cargarLogoEscuela(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    logoEscuelaBase64 = e.target.result;
+                    guardarDB();
+                    actualizarPreviewLogo();
+                    mostrarToast("Logo agregado con éxito.");
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function eliminarLogoEscuela() {
+            logoEscuelaBase64 = '';
+            guardarDB();
+            actualizarPreviewLogo();
+            document.getElementById('fileLogoEscuela').value = '';
+            mostrarToast("Logo removido.");
+        }
+
+        function actualizarPreviewLogo() {
+            const container = document.getElementById('previewLogoContainer');
+            if (logoEscuelaBase64) {
+                container.innerHTML = `<img src="${logoEscuelaBase64}" class="w-full h-full object-cover">`;
+            } else {
+                container.innerHTML = `<span class="text-xs text-slate-400">Sin logo</span>`;
+            }
+        }
+
+        function cambiarColorTarjeta(hex) {
+            colorTarjeta = hex;
+            document.getElementById('txtColorHex').innerText = hex;
+            guardarDB();
+        }
+
+        function cambiarVista(vista) {
+            document.getElementById('vistaEscaner').classList.add('hidden');
+            document.getElementById('vistaAlumnos').classList.add('hidden');
+            document.getElementById('vistaReportes').classList.add('hidden');
+
+            document.getElementById('btnTabEscaner').className = "flex flex-col items-center text-slate-400 text-xs font-bold py-1.5 px-4";
+            document.getElementById('btnTabAlumnos').className = "flex flex-col items-center text-slate-400 text-xs font-bold py-1.5 px-4";
+            document.getElementById('btnTabReportes').className = "flex flex-col items-center text-slate-400 text-xs font-bold py-1.5 px-4";
+
+            if (vista === 'escaner') {
+                document.getElementById('vistaEscaner').classList.remove('hidden');
+                document.getElementById('btnTabEscaner').className = "flex flex-col items-center text-blue-600 text-xs font-bold py-1.5 px-4";
+                iniciarEscannerCamara();
+            } else {
+                detenerEscannerCamara();
+                if (vista === 'alumnos') {
+                    document.getElementById('vistaAlumnos').classList.remove('hidden');
+                    document.getElementById('btnTabAlumnos').className = "flex flex-col items-center text-blue-600 text-xs font-bold py-1.5 px-4";
+                    renderizarListaAlumnos();
+                } else if (vista === 'reportes') {
+                    document.getElementById('vistaReportes').classList.remove('hidden');
+                    document.getElementById('btnTabReportes').className = "flex flex-col items-center text-blue-600 text-xs font-bold py-1.5 px-4";
+                    generarReporteEstadisticas();
+                }
+            }
+        }
+
+        function sincronizarSelectoresEscuelasGrupos() {
+            const selEsc = document.getElementById('selEscuelaActiva');
+            const selGrp = document.getElementById('selGrupoActivo');
+            
+            selEsc.innerHTML = '<option value="">-- Selecciona Escuela --</option>';
+            Object.keys(db.escuelas).forEach(esc => {
+                selEsc.innerHTML += `<option value="${esc}" ${esc === escuelaActiva ? 'selected' : ''}>${esc}</option>`;
+            });
+
+            selGrp.innerHTML = '<option value="">-- Selecciona Grupo --</option>';
+            if (escuelaActiva && db.escuelas[escuelaActiva]) {
+                Object.keys(db.escuelas[escuelaActiva].grupos).forEach(grp => {
+                    selGrp.innerHTML += `<option value="${grp}" ${grp === grupoActivo ? 'selected' : ''}>${grp}</option>`;
+                });
+            }
+
+            actualizarContextoLabel();
+        }
+
+        function cambiarEscuelaActiva() {
+            escuelaActiva = document.getElementById('selEscuelaActiva').value;
+            grupoActivo = '';
+            guardarDB();
+            sincronizarSelectoresEscuelasGrupos();
+            if(!document.getElementById('vistaEscaner').classList.contains('hidden')) {
+                renderizarAsistenciasHoy();
+            }
+        }
+
+        function cambiarGrupoActivo() {
+            grupoActivo = document.getElementById('selGrupoActivo').value;
+            guardarDB();
+            actualizarContextoLabel();
+            if(!document.getElementById('vistaEscaner').classList.contains('hidden')) {
+                renderizarAsistenciasHoy();
+            } else if(!document.getElementById('vistaAlumnos').classList.contains('hidden')) {
+                renderizarListaAlumnos();
+            } else if(!document.getElementById('vistaReportes').classList.contains('hidden')) {
+                generarReporteEstadisticas();
+            }
+        }
+
+        function actualizarContextoLabel() {
+            const lbl = document.getElementById('lblContexto');
+            if (escuelaActiva && grupoActivo) {
+                lbl.innerText = `${escuelaActiva} | Grupo: ${grupoActivo}`;
+            } else {
+                lbl.innerText = "Selecciona Escuela y Grupo";
+            }
+        }
+
+        // Lógica de Recorte de Imagen
+        function cargarImagenParaRecortar(event) {
+            const files = event.target.files;
+            if (files && files.length > 0) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = document.getElementById('imagenParaRecortar');
+                    img.src = e.target.result;
+                    document.getElementById('modalRecorte').classList.remove('hidden');
+                    if (cropper) cropper.destroy();
+                    cropper = new Cropper(img, {
+                        aspectRatio: 1,
+                        viewMode: 1,
+                        dragMode: 'move',
+                        autoCropArea: 0.8,
+                        responsive: true
+                    });
+                };
+                reader.readAsDataURL(files[0]);
+            }
+        }
+
+        function cancelarRecorte() {
+            document.getElementById('modalRecorte').classList.add('hidden');
+            document.getElementById('fileFotoAlumno').value = '';
+            if (cropper) cropper.destroy();
+            fotoRecortadaBase64 = null;
+        }
+
+        function guardarRecorte() {
+            if (cropper) {
+                const canvas = cropper.getCroppedCanvas({ width: 300, height: 300 });
+                fotoRecortadaBase64 = canvas.toDataURL('image/jpeg');
+                document.getElementById('modalRecorte').classList.add('hidden');
+                cropper.destroy();
+                mostrarToast("Foto recortada con éxito.");
+            }
+        }
+
+        function abrirModalConfig() {
+            if (!escuelaSeleccionadaAdmin && escuelaActiva) {
+                escuelaSeleccionadaAdmin = escuelaActiva;
+            } else if (!escuelaSeleccionadaAdmin) {
+                const keys = Object.keys(db.escuelas);
+                if (keys.length > 0) escuelaSeleccionadaAdmin = keys[0];
+            }
+            renderizarListaEscuelasConfig();
+            document.getElementById('modalConfig').classList.remove('hidden');
+        }
+
+        function cerrarModalConfig() { 
+            document.getElementById('modalConfig').classList.add('hidden');
+            sincronizarSelectoresEscuelasGrupos();
+            if(!document.getElementById('vistaAlumnos').classList.contains('hidden')) {
+                renderizarListaAlumnos();
+            }
+        }
+
+        function renderizarListaEscuelasConfig() {
+            const contenedor = document.getElementById('listaEscuelasConfig');
+            const escuelasKeys = Object.keys(db.escuelas);
+
+            if (escuelasKeys.length === 0) {
+                contenedor.innerHTML = '<span class="text-xs text-slate-400 italic p-1">No hay escuelas creadas todavía.</span>';
+                document.getElementById('panelGruposConfig').classList.add('hidden');
+                return;
+            }
+
+            contenedor.innerHTML = '';
+            escuelasKeys.forEach(esc => {
+                const esSeleccionada = esc === escuelaSeleccionadaAdmin;
+                contenedor.innerHTML += `
+                    <div class="flex justify-between items-center bg-white p-2 rounded-xl border ${esSeleccionada ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200'}">
+                        <button onclick="seleccionarEscuelaParaAdministrar('${esc}')" class="text-xs font-bold text-left flex-1 px-1 py-0.5 truncate ${esSeleccionada ? 'text-blue-700' : 'text-slate-700'}">
+                            🏫 ${esc} ${esSeleccionada ? '✓' : ''}
+                        </button>
+                        <button onclick="eliminarEscuela('${esc}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 font-bold">🗑️</button>
+                    </div>
+                `;
+            });
+
+            if (escuelaSeleccionadaAdmin && db.escuelas[escuelaSeleccionadaAdmin]) {
+                mostrarPanelGruposAdmin(escuelaSeleccionadaAdmin);
+            } else {
+                document.getElementById('panelGruposConfig').classList.add('hidden');
+            }
+        }
+
+        function seleccionarEscuelaParaAdministrar(nombreEscuela) {
+            escuelaSeleccionadaAdmin = nombreEscuela;
+            renderizarListaEscuelasConfig();
+        }
+
+        function mostrarPanelGruposAdmin(nombreEscuela) {
+            document.getElementById('lblEscuelaAdminConfig').innerText = nombreEscuela;
+            const contenedorGrupos = document.getElementById('listaGruposAdminConfig');
+            const grupos = db.escuelas[nombreEscuela].grupos;
+            const gruposKeys = Object.keys(grupos);
+
+            if (gruposKeys.length === 0) {
+                contenedorGrupos.innerHTML = '<p class="text-xs text-slate-400 italic py-1">Esta escuela no tiene grupos creados.</p>';
+            } else {
+                contenedorGrupos.innerHTML = '';
+                gruposKeys.forEach(grp => {
+                    contenedorGrupos.innerHTML += `
+                        <div class="flex justify-between items-center bg-white p-2.5 rounded-xl border border-blue-200 text-xs">
+                            <span class="font-bold text-slate-700">Grupo: ${grp}</span>
+                            <button onclick="eliminarGrupoDeEscuela('${nombreEscuela}', '${grp}')" class="text-red-500 hover:text-red-700 text-xs font-bold px-2 py-0.5">🗑️ Eliminar</button>
+                        </div>
+                    `;
+                });
+            }
+
+            document.getElementById('panelGruposConfig').classList.remove('hidden');
+        }
+
+        function agregarEscuela() {
+            const nombre = document.getElementById('txtNuevaEscuela').value.trim();
+            if (!nombre) return;
+            if (!db.escuelas[nombre]) {
+                db.escuelas[nombre] = { grupos: {} };
+                escuelaSeleccionadaAdmin = nombre;
+                if (!escuelaActiva) escuelaActiva = nombre;
+                guardarDB();
+                document.getElementById('txtNuevaEscuela').value = '';
+                renderizarListaEscuelasConfig();
+                mostrarToast("Escuela creada con éxito.");
+            } else {
+                mostrarToast("La escuela ya existe.", "warning");
+            }
+        }
+
+        function eliminarEscuela(nombreEscuela) {
+            if (confirm(`¿Eliminar la escuela "${nombreEscuela}"? Se borrarán todos sus grupos y alumnos.`)) {
+                delete db.escuelas[nombreEscuela];
+                if (escuelaActiva === nombreEscuela) { escuelaActiva = ''; grupoActivo = ''; }
+                if (escuelaSeleccionadaAdmin === nombreEscuela) {
+                    const keys = Object.keys(db.escuelas);
+                    escuelaSeleccionadaAdmin = keys.length > 0 ? keys[0] : '';
+                }
+                guardarDB();
+                renderizarListaEscuelasConfig();
+                sincronizarSelectoresEscuelasGrupos();
+                mostrarToast("Escuela eliminada.");
+            }
+        }
+
+        function agregarGrupoDesdeConfig() {
+            const nombreGrupo = document.getElementById('txtNuevoGrupoConfig').value.trim();
+            if (!nombreGrupo) return;
+            if (!escuelaSeleccionadaAdmin) {
+                mostrarToast("Selecciona una escuela primero.", "warning");
+                return;
+            }
+
+            const gruposEscuela = db.escuelas[escuelaSeleccionadaAdmin].grupos;
+            if (!gruposEscuela[nombreGrupo]) {
+                gruposEscuela[nombreGrupo] = { alumnos: {}, asistencias: {} };
+                if (!grupoActivo && escuelaActiva === escuelaSeleccionadaAdmin) {
+                    grupoActivo = nombreGrupo;
+                }
+                guardarDB();
+                document.getElementById('txtNuevoGrupoConfig').value = '';
+                mostrarPanelGruposAdmin(escuelaSeleccionadaAdmin);
+                mostrarToast(`Grupo ${nombreGrupo} agregado.`);
+            } else {
+                mostrarToast("El grupo ya existe.", "warning");
+            }
+        }
+
+        function eliminarGrupoDeEscuela(nombreEscuela, nombreGrupo) {
+            if (confirm(`¿Eliminar el grupo ${nombreGrupo}?`)) {
+                delete db.escuelas[nombreEscuela].grupos[nombreGrupo];
+                if (grupoActivo === nombreGrupo && escuelaActiva === nombreEscuela) {
+                    grupoActivo = '';
+                }
+                guardarDB();
+                mostrarPanelGruposAdmin(nombreEscuela);
+                mostrarToast("Grupo eliminado.");
+            }
+        }
+
+        // Registrar o Editar Alumno
+        function prepararImagenAlumno(e) {
+            e.preventDefault();
+            if (!escuelaActiva || !grupoActivo) {
+                mostrarToast("Selecciona una escuela y un grupo activo primero.", "warning");
+                return;
+            }
+
+            const idOriginal = document.getElementById('editandoIdOriginal').value;
+            const nuevoId = document.getElementById('txtIdAlumno').value.trim();
+            const nombre = document.getElementById('txtNombreAlumno').value.trim();
+            
+            const grupoData = db.escuelas[escuelaActiva].grupos[grupoActivo];
+
+            if (idOriginal && idOriginal !== nuevoId && grupoData.alumnos[nuevoId]) {
+                mostrarToast("Ya existe otro alumno con ese ID.", "warning");
+                return;
+            }
+
+            let fotoFinal = fotoRecortadaBase64;
+            if (!fotoFinal && idOriginal && grupoData.alumnos[idOriginal]) {
+                fotoFinal = grupoData.alumnos[idOriginal].foto; // Mantener foto anterior si no se recortó una nueva
+            }
+
+            if (idOriginal && idOriginal !== nuevoId) {
+                delete grupoData.alumnos[idOriginal]; // Si cambió el ID, borramos el anterior
+            }
+
+            grupoData.alumnos[nuevoId] = { id: nuevoId, nombre, foto: fotoFinal || null };
+            guardarDB();
+
+            cancelarEdicionAlumno();
+            renderizarListaAlumnos();
+            mostrarToast(idOriginal ? "Alumno actualizado con éxito." : "Alumno guardado con éxito.");
+        }
+
+        function iniciarEdicionAlumno(id) {
+            const grupoData = db.escuelas[escuelaActiva].grupos[grupoActivo];
+            const alum = grupoData.alumnos[id];
+            if (!alum) return;
+
+            document.getElementById('editandoIdOriginal').value = alum.id;
+            document.getElementById('txtIdAlumno').value = alum.id;
+            document.getElementById('txtNombreAlumno').value = alum.nombre;
+            document.getElementById('tituloFormAlumno').innerText = "Editar Alumno: " + alum.nombre;
+            document.getElementById('btnGuardarAlumno').innerText = "Actualizar Alumno";
+            document.getElementById('btnCancelarEdicion').classList.remove('hidden');
+            fotoRecortadaBase64 = alum.foto;
+
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function cancelarEdicionAlumno() {
+            document.getElementById('editandoIdOriginal').value = '';
+            document.getElementById('txtIdAlumno').value = '';
+            document.getElementById('txtNombreAlumno').value = '';
+            document.getElementById('fileFotoAlumno').value = '';
+            document.getElementById('tituloFormAlumno').innerText = "Registrar Nuevo Alumno";
+            document.getElementById('btnGuardarAlumno').innerText = "Guardar Alumno y Generar QR";
+            document.getElementById('btnCancelarEdicion').classList.add('hidden');
+            fotoRecortadaBase64 = null;
+        }
+
+        function renderizarListaAlumnos() {
+            const contenedor = document.getElementById('tablaAlumnos');
+            const contador = document.getElementById('contadorAlumnos');
+            if (!escuelaActiva || !grupoActivo) {
+                contenedor.innerHTML = '<p class="text-slate-400 italic text-center py-3">Selecciona escuela y grupo.</p>';
+                contador.innerText = '0';
+                return;
+            }
+
+            const alumnos = db.escuelas[escuelaActiva].grupos[grupoActivo].alumnos;
+            const keys = Object.keys(alumnos);
+            contador.innerText = keys.length;
+
+            if (keys.length === 0) {
+                contenedor.innerHTML = '<p class="text-slate-400 italic text-center py-3">No hay alumnos registrados en este grupo.</p>';
+                return;
+            }
+
+            contenedor.innerHTML = '';
+            keys.forEach(id => {
+                const alum = alumnos[id];
+                const avatar = alum.foto ? `<img src="${alum.foto}" class="w-10 h-10 rounded-full object-cover border">` : `<div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-sm font-bold text-slate-600">${alum.nombre.charAt(0)}</div>`;
+                
+                contenedor.innerHTML += `
+                    <div class="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                        <div class="flex items-center gap-3">
+                            ${avatar}
+                            <div>
+                                <p class="font-bold text-slate-800">${alum.nombre}</p>
+                                <p class="text-xs text-slate-500 font-mono">ID: ${alum.id}</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-1">
+                            <button onclick="iniciarEdicionAlumno('${id}')" class="text-blue-600 hover:text-blue-800 text-sm font-bold px-2 py-1" title="Editar">✏️</button>
+                            <button onclick="eliminarAlumno('${id}')" class="text-red-500 hover:text-red-700 text-sm font-bold px-2 py-1" title="Eliminar">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function eliminarAlumno(id) {
+            if(confirm("¿Eliminar este alumno del grupo?")) {
+                delete db.escuelas[escuelaActiva].grupos[grupoActivo].alumnos[id];
+                guardarDB();
+                renderizarListaAlumnos();
+                mostrarToast("Alumno eliminado.");
+            }
+        }
+
+        function iniciarEscannerCamara() {
+            if (scannerActivo) return;
+            setTimeout(() => {
+                html5QrCode = new Html5Qrcode("reader");
+                html5QrCode.start(
+                    { facingMode: "environment" },
+                    { fps: 10, qrbox: 240 },
+                    onScanSuccess
+                ).then(() => { scannerActivo = true; }).catch(err => {
+                    console.error("Cámara no disponible", err);
+                });
+            }, 300);
+        }
+
+        function detenerEscannerCamara() {
+            if (html5QrCode && scannerActivo) {
+                html5QrCode.stop().then(() => {
+                    scannerActivo = false;
+                    html5QrCode.clear();
+                }).catch(err => console.error("Error al detener cámara", err));
+            }
+        }
+
+        function onScanSuccess(decodedText) {
+            if (!escuelaActiva || !grupoActivo) {
+                mostrarToast("Selecciona Escuela y Grupo primero.", "warning");
+                return;
+            }
+
+            const grupoData = db.escuelas[escuelaActiva].grupos[grupoActivo];
+            const alumno = grupoData.alumnos[decodedText];
+
+            if (!alumno) {
+                mostrarToast(`QR No registrado: ${decodedText}`, "error");
+                if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                return;
+            }
+
+            const hoyFecha = new Date().toISOString().split('T')[0];
+            const horaActual = new Date().toLocaleTimeString();
+
+            if (!grupoData.asistencias[hoyFecha]) {
+                grupoData.asistencias[hoyFecha] = {};
+            }
+
+            if (grupoData.asistencias[hoyFecha][decodedText]) {
+                mostrarToast(`⚠️ ${alumno.nombre} ya tenía asistencia hoy.`, "warning");
+                if (navigator.vibrate) navigator.vibrate(100);
+            } else {
+                grupoData.asistencias[hoyFecha][decodedText] = horaActual;
+                guardarDB();
+                mostrarToast(`✅ Asistencia: ${alumno.nombre} (${horaActual})`);
+                if (navigator.vibrate) navigator.vibrate(200);
+                renderizarAsistenciasHoy();
+            }
+        }
+
+        function renderizarAsistenciasHoy() {
+            const contenedor = document.getElementById('listaAsistidosHoy');
+            if (!escuelaActiva || !grupoActivo) {
+                contenedor.innerHTML = '<p class="text-slate-400 italic text-center py-3">Selecciona escuela y grupo.</p>';
+                return;
+            }
+
+            const hoyFecha = new Date().toISOString().split('T')[0];
+            const grupoData = db.escuelas[escuelaActiva].grupos[grupoActivo];
+            const asistidosHoy = (grupoData.asistencias[hoyFecha]) ? grupoData.asistencias[hoyFecha] : {};
+            const idsAsistidos = Object.keys(asistidosHoy);
+
+            if (idsAsistidos.length === 0) {
+                contenedor.innerHTML = '<p class="text-slate-400 italic text-center py-3">Ningún registro hoy todavía.</p>';
+                return;
+            }
+
+            contenedor.innerHTML = '';
+            idsAsistidos.reverse().forEach(id => {
+                const alum = grupoData.alumnos[id] || { nombre: "Alumno Desconocido" };
+                const hora = asistidosHoy[id];
+                contenedor.innerHTML += `
+                    <div class="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                        <span class="font-bold text-slate-800">${alum.nombre}</span>
+                        <span class="text-blue-600 font-bold">${hora}</span>
+                    </div>
+                `;
+            });
+        }
+
+        // Abrir Modal de Credenciales y renderizar tarjetas con logo y nombre de maestro
+        function abrirModalTarjetas() {
+            if (!escuelaActiva || !grupoActivo) {
+                mostrarToast("Selecciona escuela y grupo.", "warning");
+                return;
+            }
+            const alumnos = db.escuelas[escuelaActiva].grupos[grupoActivo].alumnos;
+            const keys = Object.keys(alumnos);
+            if (keys.length === 0) {
+                mostrarToast("No hay alumnos en este grupo.", "warning");
+                return;
+            }
+
+            const contenedor = document.getElementById('contenedorTarjetasImpresion');
+            contenedor.innerHTML = '';
+
+            keys.forEach(id => {
+                const alum = alumnos[id];
+                const cardId = `qr-card-${id}`;
+                const btnDescargaId = `btn-download-${id}`;
+                const avatarHtml = alum.foto ? `<img src="${alum.foto}" class="w-16 h-16 rounded-full object-cover border-2 border-white shadow-md">` : `<div class="w-16 h-16 rounded-full bg-slate-300 flex items-center justify-center text-lg font-bold text-slate-700 shadow-md">${alum.nombre.charAt(0)}</div>`;
+                const logoHtml = logoEscuelaBase64 ? `<img src="${logoEscuelaBase64}" class="w-7 h-7 rounded-md object-cover border bg-white shadow-xs">` : `<div class="w-7 h-7 rounded-md bg-white/30 flex items-center justify-center text-[9px] font-bold text-white">LOGO</div>`;
+                const maestroHtml = nombreMaestro ? `<p class="text-[9px] text-white/90 font-medium truncate w-full">Prof. ${nombreMaestro}</p>` : '';
+
+                contenedor.innerHTML += `
+                    <div class="flex flex-col items-center">
+                        <div id="card-element-${id}" class="print-card rounded-2xl p-3.5 flex flex-col justify-between shadow-md text-white w-full max-w-xs relative" style="background-color: ${colorTarjeta}; height: 180px;">
+                            <!-- Encabezado superior con Logo -->
+                            <div class="flex justify-between items-center">
+                                ${logoHtml}
+                                <span class="text-[9px] font-extrabold uppercase tracking-wider text-white/90">${escuelaActiva}</span>
+                            </div>
+                            <!-- Cuerpo central (Foto + Datos y QR) -->
+                            <div class="flex items-center justify-between my-auto">
+                                <div class="flex flex-col items-center justify-center text-center w-1/2 pr-1">
+                                    ${avatarHtml}
+                                    <h4 class="font-bold text-xs text-white mt-1 truncate w-full">${alum.nombre}</h4>
+                                    <p class="text-[9px] text-white/90 font-semibold">Grupo: ${grupoActivo}</p>
+                                    ${maestroHtml}
+                                </div>
+                                <div class="bg-[#fbf9f1] rounded-xl p-2 flex flex-col items-center justify-center shadow-inner w-1/2">
+                                    <div id="${cardId}" class="bg-white p-0.5 rounded-md"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <button id="${btnDescargaId}" onclick="exportarTarjetaComoImagen('${id}', '${alum.nombre}')" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-1.5 px-3 rounded-xl shadow-xs transition">
+                            📥 Descargar Credencial (PNG)
+                        </button>
+                    </div>
+                `;
+            });
+
+            document.getElementById('modalTarjetas').classList.remove('hidden');
+
+            setTimeout(() => {
+                keys.forEach(id => {
+                    const cardId = `qr-card-${id}`;
+                    document.getElementById(cardId).innerHTML = '';
+                    new QRCode(document.getElementById(cardId), {
+                        text: id,
+                        width: 75,
+                        height: 75
+                    });
+                });
+            }, 100);
+        }
+
+        // Exportar credencial individual como imagen PNG usando html2canvas
+        function exportarTarjetaComoImagen(id, nombreAlumno) {
+            const cardElement = document.getElementById(`card-element-${id}`);
+            const btn = document.getElementById(`btn-download-${id}`);
+            btn.innerText = "Generando...";
+            btn.disabled = true;
+
+            html2canvas(cardElement, { scale: 3, useCORS: true }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = `Credencial_${nombreAlumno.replace(/\s+/g, '_')}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                btn.innerText = "📥 Descargar Credencial (PNG)";
+                btn.disabled = false;
+                mostrarToast("Credencial descargada con éxito.");
+            }).catch(err => {
+                console.error(err);
+                btn.innerText = "📥 Descargar Credencial (PNG)";
+                btn.disabled = false;
+                mostrarToast("Error al exportar imagen.", "error");
+            });
+        }
+
+        function cerrarModalTarjetas() {
+            document.getElementById('modalTarjetas').classList.add('hidden');
+        }
+
+        function generarReporteEstadisticas() {
+            const tbody = document.getElementById('cuerpoTablaReporte');
+            const lblClases = document.getElementById('lblTotalClases');
+            
+            if (!escuelaActiva || !grupoActivo) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-400 italic">Selecciona escuela y grupo.</td></tr>';
+                lblClases.innerText = '0';
+                return;
+            }
+
+            const grupoData = db.escuelas[escuelaActiva].grupos[grupoActivo];
+            const alumnos = grupoData.alumnos;
+            const asistenciasFechas = grupoData.asistencias;
+            const totalDiasClase = Object.keys(asistenciasFechas).length;
+
+            lblClases.innerText = totalDiasClase;
+            document.getElementById('printTituloEscuela').innerText = `${escuelaActiva}`;
+            document.getElementById('printSubtituloGrupo').innerText = `Reporte de Asistencias - Grupo: ${grupoActivo} (Total Clases: ${totalDiasClase})`;
+
+            const alumnoIds = Object.keys(alumnos);
+            if (alumnoIds.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-4 text-center text-slate-400 italic">No hay alumnos registrados.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = '';
+            alumnoIds.forEach(id => {
+                const alum = alumnos[id];
+                let totalAsistenciasAlumno = 0;
+
+                Object.keys(asistenciasFechas).forEach(fecha => {
+                    if (asistenciasFechas[fecha][id]) {
+                        totalAsistenciasAlumno++;
+                    }
+                });
+
+                const totalFaltasAlumno = totalDiasClase - totalAsistenciasAlumno;
+                const porcentaje = totalDiasClase > 0 ? Math.round((totalAsistenciasAlumno / totalDiasClase) * 100) : 0;
+
+                tbody.innerHTML += `
+                    <tr class="border-b border-slate-200">
+                        <td class="p-3 font-bold text-slate-800">${alum.nombre}</td>
+                        <td class="p-3 text-center text-emerald-600 font-extrabold">${totalAsistenciasAlumno}</td>
+                        <td class="p-3 text-center text-red-500 font-extrabold">${totalFaltasAlumno}</td>
+                        <td class="p-3 text-center text-slate-700 font-bold">${porcentaje}%</td>
+                    </tr>
+                `;
+            });
+        }
+
+        function exportarRespaldoJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(db, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `respaldo_asistencias_${new Date().toISOString().split('T')[0]}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+
+        function importarRespaldoJSON(event) {
+            const fileReader = new FileReader();
+            if (event.target.files[0]) {
+                fileReader.readAsText(event.target.files[0], "UTF-8");
+                fileReader.onload = (e) => {
+                    try {
+                        db = JSON.parse(e.target.result);
+                        guardarDB();
+                        sincronizarSelectoresEscuelasGrupos();
+                        mostrarToast("Respaldo importado con éxito.");
+                        cerrarModalConfig();
+                    } catch (error) {
+                        mostrarToast("Error al leer el archivo de respaldo.", "error");
+                    }
+                };
+            }
+        }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('data:text/javascript,' + encodeURIComponent(`
+                    self.addEventListener('fetch', function(event) {
+                        event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+                    });
+                `));
+            });
+        }
+    </script>
+</body>
+</html>
